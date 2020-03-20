@@ -174,9 +174,9 @@ mod test {
 
     #[test]
     fn spsc() {
-        const RANGE: core::ops::Range<usize> = 0usize..65536usize;
+        const RANGE: core::ops::Range<usize> = 0usize..4194304usize;
 
-        let queue: Box<StaticSpinQueue<usize, 4>> = Default::default();
+        let queue: Box<StaticSpinQueue<usize, 128>> = Default::default();
         let queue = Box::leak(queue);
 
         let mut producer = queue.producer();
@@ -209,17 +209,20 @@ mod test {
     }
 
     lazy_static::lazy_static! {
-        static ref MPMC_QUEUE: StaticSpinQueue<usize, 65536> = Default::default();
+        static ref MPMC_QUEUE: Box<StaticSpinQueue<usize, 65536>> = box Default::default();
     }
 
     #[test]
     fn mpmc() {
-        use std::collections::HashMap;
-
-        const RANGE: core::ops::Range<usize> = 0usize..262144usize;
-        const P_COUNT: usize = 8;
+        const LIMIT: usize = 262144usize;
+        const RANGE: core::ops::Range<usize> = 0usize..LIMIT;
+        const P_COUNT: usize = 4;
+        const P_ITER: usize = 16;
         const C_COUNT: usize = 8;
         const C_CHECK_INTERVAL: usize = 128;
+        // const P_YIELD_INTERVAL: usize = 512;
+
+        let mut tot = Box::new([0u8; LIMIT]);
 
         let pending_producer = Box::leak(Box::new(AtomicUsize::new(P_COUNT)));
 
@@ -229,12 +232,24 @@ mod test {
             let ppcnt = &*pending_producer;
             pths.push(std::thread::spawn(move || {
                 let mut fail_cnt = 0;
-                for i in RANGE {
-                    loop {
-                        if producer.push(i).is_ok() {
-                            break;
-                        } else {
-                            fail_cnt += 1;
+
+                // let mut next_yield = P_YIELD_INTERVAL;
+
+                for _ in 0..P_ITER {
+                    for i in RANGE {
+                        loop {
+                            if producer.push(i).is_ok() {
+                                break;
+                            } else {
+                                fail_cnt += 1;
+                            }
+                            /*
+                            next_yield -= 1;
+                            if next_yield == 0 {
+                                next_yield = P_YIELD_INTERVAL;
+                                std::thread::yield_now();
+                            }
+                            */
                         }
                     }
                 }
@@ -249,10 +264,9 @@ mod test {
 
         for _ in 0..C_COUNT {
             let mut consumer = MPMC_QUEUE.consumer();
+            let counter = Box::leak(Box::new([0u8; LIMIT]));
             let ppcnt = &*pending_producer;
             cths.push(std::thread::spawn(move || {
-                let mut counter = HashMap::new();
-
                 loop {
                     let pending = ppcnt.load(Ordering::Acquire);
                     if pending == 0 {
@@ -261,21 +275,19 @@ mod test {
 
                     for _ in 0..C_CHECK_INTERVAL {
                         if let Some(i) = consumer.pop() {
-                            (*counter.entry(i).or_insert(0)) += 1;
+                            counter[i] += 1;
                         }
                     }
                 }
 
                 // Until consumer is empty
                 while let Some(i) = consumer.pop() {
-                    (*counter.entry(i).or_insert(0)) += 1;
+                    counter[i] += 1;
                 }
 
                 counter
             }))
         }
-
-        let mut tot = HashMap::new();
 
         for (idx, p) in pths.into_iter().enumerate() {
             let cnt = p.join().unwrap();
@@ -284,30 +296,15 @@ mod test {
 
         for c in cths.into_iter() {
             let cnt = c.join().unwrap();
-            for (k, v) in cnt.into_iter() {
-                *tot.entry(k).or_insert(0) += v;
+            for i in RANGE {
+                tot[i] += cnt[i];
             }
         }
 
-        let mut stdans = HashMap::new();
         for i in RANGE {
-            stdans.insert(i, P_COUNT);
-        }
-
-        if stdans != tot {
-            for (k, v) in stdans.iter() {
-                if tot.get(k) != Some(v) {
-                    println!("Failed key: {} -> {:?}", k, tot.get(k));
-                }
+            if tot[i] as usize != P_COUNT * P_ITER {
+                panic!("Failed key: {} -> {}", i, tot[i]);
             }
-
-            for (k, v) in tot.iter() {
-                if !stdans.contains_key(k) {
-                    println!("Redundant key: {} -> {:?}", k, v);
-                }
-            }
-
-            panic!("Failed!");
         }
     }
 }
