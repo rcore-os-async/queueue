@@ -208,41 +208,47 @@ mod test {
         cth.join().unwrap();
     }
 
+    lazy_static::lazy_static! {
+        static ref MPMC_QUEUE: StaticSpinQueue<usize, 65536> = Default::default();
+    }
+
     #[test]
     fn mpmc() {
         use std::collections::HashMap;
 
-        const RANGE: core::ops::Range<usize> = 0usize..65536usize;
-        const P_COUNT: usize = 4;
-        const C_COUNT: usize = 4;
+        const RANGE: core::ops::Range<usize> = 0usize..262144usize;
+        const P_COUNT: usize = 8;
+        const C_COUNT: usize = 8;
         const C_CHECK_INTERVAL: usize = 128;
-
-        let queue: Box<StaticSpinQueue<usize, 4>> = Default::default();
-        let queue = Box::leak(queue);
 
         let pending_producer = Box::leak(Box::new(AtomicUsize::new(P_COUNT)));
 
         let mut pths = Vec::with_capacity(P_COUNT);
         for _ in 0..P_COUNT {
-            let mut producer = queue.producer();
+            let mut producer = MPMC_QUEUE.producer();
             let ppcnt = &*pending_producer;
             pths.push(std::thread::spawn(move || {
+                let mut fail_cnt = 0;
                 for i in RANGE {
                     loop {
                         if producer.push(i).is_ok() {
                             break;
+                        } else {
+                            fail_cnt += 1;
                         }
                     }
                 }
 
                 ppcnt.fetch_sub(1, Ordering::Release);
+
+                fail_cnt
             }));
         }
 
         let mut cths = Vec::with_capacity(C_COUNT);
 
         for _ in 0..C_COUNT {
-            let mut consumer = queue.consumer();
+            let mut consumer = MPMC_QUEUE.consumer();
             let ppcnt = &*pending_producer;
             cths.push(std::thread::spawn(move || {
                 let mut counter = HashMap::new();
@@ -250,7 +256,7 @@ mod test {
                 loop {
                     let pending = ppcnt.load(Ordering::Acquire);
                     if pending == 0 {
-                        return counter;
+                        break;
                     }
 
                     for _ in 0..C_CHECK_INTERVAL {
@@ -259,13 +265,21 @@ mod test {
                         }
                     }
                 }
+
+                // Until consumer is empty
+                while let Some(i) = consumer.pop() {
+                    (*counter.entry(i).or_insert(0)) += 1;
+                }
+
+                counter
             }))
         }
 
         let mut tot = HashMap::new();
 
-        for p in pths.into_iter() {
-            p.join().unwrap();
+        for (idx, p) in pths.into_iter().enumerate() {
+            let cnt = p.join().unwrap();
+            println!("Producer {} fail count: {}", idx, cnt);
         }
 
         for c in cths.into_iter() {
@@ -280,6 +294,20 @@ mod test {
             stdans.insert(i, P_COUNT);
         }
 
-        assert_eq!(stdans, tot);
+        if stdans != tot {
+            for (k, v) in stdans.iter() {
+                if tot.get(k) != Some(v) {
+                    println!("Failed key: {} -> {:?}", k, tot.get(k));
+                }
+            }
+
+            for (k, v) in tot.iter() {
+                if !stdans.contains_key(k) {
+                    println!("Redundant key: {} -> {:?}", k, v);
+                }
+            }
+
+            panic!("Failed!");
+        }
     }
 }
