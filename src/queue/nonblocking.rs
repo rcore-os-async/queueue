@@ -209,12 +209,12 @@ mod test {
     }
 
     lazy_static::lazy_static! {
-        static ref MPMC_QUEUE: Box<StaticSpinQueue<usize, 65536>> = box Default::default();
+        static ref MPMC_QUEUE: Box<StaticSpinQueue<usize, 1>> = box Default::default();
     }
 
     #[test]
     fn mpmc() {
-        const LIMIT: usize = 262144usize;
+        const LIMIT: usize = 1;
         const RANGE: core::ops::Range<usize> = 0usize..LIMIT;
         const P_COUNT: usize = 4;
         const P_ITER: usize = 16;
@@ -222,7 +222,7 @@ mod test {
         const C_CHECK_INTERVAL: usize = 128;
         // const P_YIELD_INTERVAL: usize = 512;
 
-        let mut tot = Box::new([0u8; LIMIT]);
+        let mut tot = box [0u8; LIMIT];
 
         let pending_producer = Box::leak(Box::new(AtomicUsize::new(P_COUNT)));
 
@@ -264,7 +264,7 @@ mod test {
 
         for _ in 0..C_COUNT {
             let mut consumer = MPMC_QUEUE.consumer();
-            let counter = Box::leak(Box::new([0u8; LIMIT]));
+            let counter = Box::leak(box [0u8; LIMIT]);
             let ppcnt = &*pending_producer;
             cths.push(std::thread::spawn(move || {
                 loop {

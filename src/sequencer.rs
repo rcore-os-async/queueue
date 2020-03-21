@@ -29,7 +29,7 @@ impl Sequencer for SpinSequencer {
 }
 
 #[cfg(feature="std")]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CondvarSequencer {
     seq: std::sync::Mutex<usize>,
     condvar: std::sync::Condvar,
@@ -38,17 +38,17 @@ pub struct CondvarSequencer {
 #[cfg(feature="std")]
 impl Sequencer for CondvarSequencer {
     fn wait_until(&self, sequence: usize, timeout: Option<core::time::Duration>) -> Result<(), ()> {
-        let cur = self.seq.lock();
+        let cur = self.seq.lock().unwrap();
 
         if *cur == sequence {
             return Ok(());
         }
 
-        let cond = |pending| { *pending == sequence };
+        let cond = |pending: &mut usize| { *pending == sequence };
 
         match timeout {
             Some(to) => {
-                let (guard, toe) = self.condvar.wait_timeout_while(cur, timeout, cond).unwrap();
+                let (guard, toe) = self.condvar.wait_timeout_while(cur, to, cond).unwrap();
                 if toe.timed_out() {
                     return Err(());
                 } else {
@@ -63,7 +63,7 @@ impl Sequencer for CondvarSequencer {
     }
 
     fn update_next(&self, sequence: usize) {
-        *self.seq.lock() = sequence;
+        *self.seq.lock().unwrap() = sequence;
         self.condvar.notify_all();
     }
 }
