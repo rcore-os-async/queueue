@@ -1,5 +1,5 @@
-use crate::slot::Slot;
-use crate::sequencer::Sequencer;
+use super::slot::Slot;
+use super::sequencer::Sequencer;
 
 use core::sync::atomic::*;
 use core::result::Result;
@@ -130,7 +130,7 @@ impl<'a, Q: Queue> Producer<'a, Q> {
     }
 }
 
-pub type StaticSpinQueue<T, const N: usize> = StaticQueue<T, crate::sequencer::SpinSequencer, {N}>;
+pub type StaticSpinQueue<T, const N: usize> = StaticQueue<T, super::sequencer::SpinSequencer, {N}>;
 
 #[cfg(test)]
 mod test {
