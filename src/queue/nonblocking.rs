@@ -8,15 +8,15 @@ use core::mem::MaybeUninit;
 pub trait Queue: Send + Sync {
     type Item;
 
-    unsafe fn sync_push(&self, t: Self::Item) -> Result<(), Self::Item> {
-        self.shared_push(t)
+    unsafe fn unsync_push(&self, t: Self::Item) -> Result<(), Self::Item> {
+        self.push(t)
     }
-    unsafe fn sync_pop(&self) -> Option<Self::Item> {
-        self.shared_pop()
+    unsafe fn unsync_pop(&self) -> Option<Self::Item> {
+        self.pop()
     }
 
-    fn shared_push(&self, t: Self::Item) -> Result<(), Self::Item>;
-    fn shared_pop(&self) -> Option<Self::Item>;
+    fn push(&self, t: Self::Item) -> Result<(), Self::Item>;
+    fn pop(&self) -> Option<Self::Item>;
 
     fn producer<'a>(&'a self) -> Producer<'a, Self> where Self: Sized{
         Producer {
@@ -78,7 +78,7 @@ impl<T, S: Sequencer, const N: usize> StaticQueue<T, S, {N}> {
 impl<T, S: Sequencer, const N: usize> Queue for StaticQueue<T, S, {N}> {
     type Item = T;
 
-    fn shared_pop(&self) -> Option<Self::Item> {
+    fn pop(&self) -> Option<Self::Item> {
         let ticket = self.obtain_pop_ticket()?;
 
         let offset = ticket % N;
@@ -87,7 +87,7 @@ impl<T, S: Sequencer, const N: usize> Queue for StaticQueue<T, S, {N}> {
         Some(self.slots[offset].pop(seq))
     }
 
-    fn shared_push(&self, t: Self::Item) -> Result<(), Self::Item> {
+    fn push(&self, t: Self::Item) -> Result<(), Self::Item> {
         let ticket = match self.obtain_push_ticket() {
             None => return Err(t),
             Some(ticket) => ticket,
@@ -120,13 +120,13 @@ pub struct Producer<'a, Q: Queue> {
 
 impl<'a, Q: Queue> Consumer<'a, Q> {
     pub fn pop(&mut self) -> Option<Q::Item> {
-        self.queue.shared_pop()
+        self.queue.pop()
     }
 }
 
 impl<'a, Q: Queue> Producer<'a, Q> {
     pub fn push(&mut self, data: Q::Item) -> Result<(), Q::Item> {
-        self.queue.shared_push(data)
+        self.queue.push(data)
     }
 }
 
