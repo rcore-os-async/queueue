@@ -50,6 +50,7 @@ impl<T, S: Sequencer, const N: usize> StaticQueue<T, S, {N}> {
                 break None;
             }
 
+            // TODO: do we need Release here?
             if self.push_ticket.compare_and_swap(cur_push, cur_push + 1, Ordering::AcqRel) == cur_push {
                 break Some(cur_push);
             }
@@ -68,6 +69,7 @@ impl<T, S: Sequencer, const N: usize> StaticQueue<T, S, {N}> {
                 return None;
             }
 
+            // TODO: do we need Release here?
             if self.pop_ticket.compare_and_swap(cur_pop, cur_pop + 1, Ordering::AcqRel) == cur_pop {
                 break Some(cur_pop);
             }
