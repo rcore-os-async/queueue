@@ -3,6 +3,8 @@ name = "queueue"
 version = "0.1.0"
 authors = ["Liu Xiaoyi <circuitcoder0@gmail.com>"]
 edition = "2018"
+license = "MIT"
+description = "Queue-like data structures used in rCore"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
