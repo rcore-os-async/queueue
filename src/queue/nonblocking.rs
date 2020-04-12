@@ -121,13 +121,13 @@ pub struct Producer<'a, Q: Queue> {
 }
 
 impl<'a, Q: Queue> Consumer<'a, Q> {
-    pub fn pop(&mut self) -> Option<Q::Item> {
+    pub fn pop(&self) -> Option<Q::Item> {
         self.queue.pop()
     }
 }
 
 impl<'a, Q: Queue> Producer<'a, Q> {
-    pub fn push(&mut self, data: Q::Item) -> Result<(), Q::Item> {
+    pub fn push(&self, data: Q::Item) -> Result<(), Q::Item> {
         self.queue.push(data)
     }
 }
