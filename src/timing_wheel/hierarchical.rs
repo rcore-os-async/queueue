@@ -104,7 +104,7 @@ pub struct Wheel<T, S: SlotLike<Item = (T, usize)>, const LEVEL: usize, const CU
 }
 
 impl<T, S: SlotLike<Item = (T, usize)>, const LEVEL: usize, const CUTOFF: usize> Wheel<T, S, LEVEL, CUTOFF> {
-    fn new(elapsed: usize) -> Self {
+    pub fn new(elapsed: usize) -> Self {
         let mut levels: [WheelLevel<S, CUTOFF>; LEVEL] = unsafe { MaybeUninit::uninit().assume_init() };
         for level in levels.iter_mut() {
             unsafe { core::ptr::write(level, Default::default()) };
@@ -230,7 +230,7 @@ impl<T, const N: usize> Default for BoundedSlot<T, N> {
 }
 
 impl<T, const N: usize> BoundedSlot<T, {N}> {
-    const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             storage: [MaybeUninit::UNINIT; {N}],
             size: 0,

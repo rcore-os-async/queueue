@@ -1,6 +1,6 @@
 [package]
 name = "queueue"
-version = "0.1.1-beta.2"
+version = "0.1.1-beta.3"
 authors = ["Liu Xiaoyi <circuitcoder0@gmail.com>"]
 edition = "2018"
 license = "MIT"
