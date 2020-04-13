@@ -18,17 +18,14 @@ struct Level<S: SlotLike, const N: usize> {
 
 impl<S: SlotLike, const N: usize> Default for Level<S, N> {
     fn default() -> Self {
-        unsafe {
-            let mut slots: [S; N] = MaybeUninit::uninit().assume_init();
+        let mut slots: [S; N] = unsafe { MaybeUninit::uninit().assume_init() };
+        for slot in slots.iter_mut() {
+            unsafe { core::ptr::write(slot, Default::default()) };
+        }
 
-            for slot in slots.iter_mut() {
-                core::ptr::write(slot, Default::default());
-            }
-
-            Self {
-                bitset: 0,
-                slots,
-            }
+        Self {
+            bitset: 0,
+            slots,
         }
     }
 }
@@ -107,21 +104,17 @@ pub struct Wheel<T, S: SlotLike<Item = (T, usize)>, const LEVEL: usize, const CU
 }
 
 impl<T, S: SlotLike<Item = (T, usize)>, const LEVEL: usize, const CUTOFF: usize> Wheel<T, S, LEVEL, CUTOFF> {
-    pub fn new(at: usize) -> Self {
-        unsafe {
-            let mut levels: [WheelLevel<S, CUTOFF>; LEVEL] = MaybeUninit::uninit().assume_init();
+    fn new(elapsed: usize) -> Self {
+        let mut levels: [WheelLevel<S, CUTOFF>; LEVEL] = unsafe { MaybeUninit::uninit().assume_init() };
+        for level in levels.iter_mut() {
+            unsafe { core::ptr::write(level, Default::default()) };
+        }
 
-            for level in levels.iter_mut() {
-                core::ptr::write(level, Default::default());
-            }
-
-            Self {
-                elapsed: at,
-                levels,
-            }
+        Self {
+            elapsed,
+            levels,
         }
     }
-
     pub fn schedule(&mut self, tick: usize, i: T) -> Result<(), T> {
         let (wheel, offset) = if let Some(inner) = self.get_pos(tick) {
             inner
@@ -232,8 +225,14 @@ pub struct BoundedSlot<T, const N: usize> {
 
 impl<T, const N: usize> Default for BoundedSlot<T, N> {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T, const N: usize> BoundedSlot<T, {N}> {
+    const fn new() -> Self {
         Self {
-            storage: MaybeUninit::uninit_array(),
+            storage: [MaybeUninit::UNINIT; {N}],
             size: 0,
         }
     }
@@ -241,6 +240,7 @@ impl<T, const N: usize> Default for BoundedSlot<T, N> {
 
 impl<T, const N: usize> SlotLike for BoundedSlot<T, {N}> {
     type Item = T;
+
     fn push(&mut self, i: Self::Item) -> Result<(), T> {
         if self.size == N {
             return Err(i);
@@ -290,55 +290,77 @@ pub type BoundedWheel<T, const N: usize> = Wheel<T, BoundedSlot<(T, usize), N>, 
 #[cfg(any(feature="std", test))]
 pub type VecDequeWheel<T> = Wheel<T, std::collections::VecDeque<(T, usize)>, 8, 6>;
 
+// New
+impl<T, const N: usize, const D: usize> Level<BoundedSlot<T, D>, N> {
+    pub const fn new_bounded() -> Self {
+        Self {
+            bitset: 0,
+            slots: [BoundedSlot::<T, D>::new(); {N}],
+        }
+    }
+}
+
+impl<T, const LEVEL: usize, const CUTOFF: usize, const D: usize> Wheel<T, BoundedSlot<(T, usize), D>, LEVEL, CUTOFF> {
+    pub const fn new_bounded(at: usize) -> Self {
+        Self {
+            elapsed: at,
+            levels: [WheelLevel::new_bounded(); LEVEL],
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
-    lazy_static::lazy_static! {
+    thread_local! {
+        static wheel_basic: core::cell::RefCell<super::BoundedWheel<usize, 16>> = core::cell::RefCell::new(super::BoundedWheel::new_bounded(0));
     }
 
     #[test]
     fn basic() {
-        let wheel = Box::leak(box super::BoundedWheel::<usize, 16>::new(0));
-        assert_eq!(wheel.min_next_event(), None);
-        wheel.schedule(5, 1).unwrap();
-        assert_eq!(wheel.min_next_event(), Some(5));
-        wheel.schedule(6, 2).unwrap();
-        wheel.schedule(89, 3).unwrap();
-        wheel.schedule(100, 4).unwrap();
-        wheel.schedule(90, 5).unwrap();
-        wheel.schedule(129, 6).unwrap();
-        wheel.schedule(170, 7).unwrap();
-        assert_eq!(wheel.min_next_event(), Some(5));
+        wheel_basic.with(|w| {
+            let mut wheel = w.borrow_mut();
+            assert_eq!(wheel.min_next_event(), None);
+            wheel.schedule(5, 1).unwrap();
+            assert_eq!(wheel.min_next_event(), Some(5));
+            wheel.schedule(6, 2).unwrap();
+            wheel.schedule(89, 3).unwrap();
+            wheel.schedule(100, 4).unwrap();
+            wheel.schedule(90, 5).unwrap();
+            wheel.schedule(129, 6).unwrap();
+            wheel.schedule(170, 7).unwrap();
+            assert_eq!(wheel.min_next_event(), Some(5));
 
-        wheel.fast_forward(2, |_, _| panic!());
-        wheel.fast_forward(4, |_, _| panic!());
-        wheel.fast_forward(5, |item, at| {
-            println!("{} @ {}", item, at);
-            if item != 1 || at != 5 {
-                panic!();
-            }
-        });
-        assert_eq!(wheel.min_next_event(), Some(6));
+            wheel.fast_forward(2, |_, _| panic!());
+            wheel.fast_forward(4, |_, _| panic!());
+            wheel.fast_forward(5, |item, at| {
+                println!("{} @ {}", item, at);
+                if item != 1 || at != 5 {
+                    panic!();
+                }
+            });
+            assert_eq!(wheel.min_next_event(), Some(6));
 
-        wheel.fast_forward(6, |item, at| {
-            println!("{} @ {}", item, at);
-            if item != 2 || at != 6 {
-                panic!();
-            }
-        });
-        assert_eq!(wheel.min_next_event(), Some(64));
+            wheel.fast_forward(6, |item, at| {
+                println!("{} @ {}", item, at);
+                if item != 2 || at != 6 {
+                    panic!();
+                }
+            });
+            assert_eq!(wheel.min_next_event(), Some(64));
 
-        wheel.fast_forward(64, |_, _| panic!());
-        assert_eq!(wheel.min_next_event(), Some(89));
-        wheel.fast_forward(89, |item, at| {
-            println!("{} @ {}", item, at);
-            if item != 3 || at != 89 {
-                panic!();
-            }
-        });
+            wheel.fast_forward(64, |_, _| panic!());
+            assert_eq!(wheel.min_next_event(), Some(89));
+            wheel.fast_forward(89, |item, at| {
+                println!("{} @ {}", item, at);
+                if item != 3 || at != 89 {
+                    panic!();
+                }
+            });
 
-        assert_eq!(wheel.min_next_event(), Some(90));
-        wheel.fast_forward(200, |item, at| {
-            println!("{} @ {}", item, at);
+            assert_eq!(wheel.min_next_event(), Some(90));
+            wheel.fast_forward(200, |item, at| {
+                println!("{} @ {}", item, at);
+            });
         });
     }
 
