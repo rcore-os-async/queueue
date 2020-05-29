@@ -11,10 +11,10 @@ description = "Queue-like data structures used in rCore"
 [dependencies]
 
 [dev-dependencies]
-lazy_static = "1.4.0"
-rand = "0.7.3"
-rand_distr = "0.2.2"
-criterion = "0.3.1"
+lazy_static = "1.4"
+rand = "0.7"
+rand_distr = "0.2"
+criterion = "0.3"
 
 [features]
 default = []

@@ -1,9 +1,9 @@
-use super::slot::Slot;
 use super::sequencer::Sequencer;
+use super::slot::Slot;
 
-use core::sync::atomic::*;
-use core::result::Result;
 use core::mem::MaybeUninit;
+use core::result::Result;
+use core::sync::atomic::*;
 
 pub trait Queue: Send + Sync {
     type Item;
@@ -18,27 +18,29 @@ pub trait Queue: Send + Sync {
     fn push(&self, t: Self::Item) -> Result<(), Self::Item>;
     fn pop(&self) -> Option<Self::Item>;
 
-    fn producer<'a>(&'a self) -> Producer<'a, Self> where Self: Sized{
-        Producer {
-            queue: self,
-        }
+    fn producer<'a>(&'a self) -> Producer<'a, Self>
+    where
+        Self: Sized,
+    {
+        Producer { queue: self }
     }
 
-    fn consumer<'a>(&'a self) -> Consumer<'a, Self> where Self: Sized {
-        Consumer {
-            queue: self,
-        }
+    fn consumer<'a>(&'a self) -> Consumer<'a, Self>
+    where
+        Self: Sized,
+    {
+        Consumer { queue: self }
     }
 }
 
 pub struct StaticQueue<T, S: Sequencer, const N: usize> {
-    slots: [Slot<T, S>; {N}],
+    slots: [Slot<T, S>; { N }],
 
     push_ticket: AtomicUsize,
     pop_ticket: AtomicUsize,
 }
 
-impl<T, S: Sequencer, const N: usize> StaticQueue<T, S, {N}> {
+impl<T, S: Sequencer, const N: usize> StaticQueue<T, S, { N }> {
     fn obtain_push_ticket(&self) -> Option<usize> {
         loop {
             let cur_push = self.push_ticket.load(Ordering::Acquire);
@@ -46,12 +48,16 @@ impl<T, S: Sequencer, const N: usize> StaticQueue<T, S, {N}> {
 
             let size = cur_push as isize - cur_pop as isize;
             // Queue is full
-            if size >= {N} as isize {
+            if size >= { N } as isize {
                 break None;
             }
 
             // TODO: do we need Release here?
-            if self.push_ticket.compare_and_swap(cur_push, cur_push + 1, Ordering::AcqRel) == cur_push {
+            if self
+                .push_ticket
+                .compare_and_swap(cur_push, cur_push + 1, Ordering::AcqRel)
+                == cur_push
+            {
                 break Some(cur_push);
             }
         }
@@ -70,14 +76,18 @@ impl<T, S: Sequencer, const N: usize> StaticQueue<T, S, {N}> {
             }
 
             // TODO: do we need Release here?
-            if self.pop_ticket.compare_and_swap(cur_pop, cur_pop + 1, Ordering::AcqRel) == cur_pop {
+            if self
+                .pop_ticket
+                .compare_and_swap(cur_pop, cur_pop + 1, Ordering::AcqRel)
+                == cur_pop
+            {
                 break Some(cur_pop);
             }
         }
     }
 }
 
-impl<T, S: Sequencer, const N: usize> Queue for StaticQueue<T, S, {N}> {
+impl<T, S: Sequencer, const N: usize> Queue for StaticQueue<T, S, { N }> {
     type Item = T;
 
     fn pop(&self) -> Option<Self::Item> {
@@ -104,7 +114,7 @@ impl<T, S: Sequencer, const N: usize> Queue for StaticQueue<T, S, {N}> {
     }
 }
 
-impl<T, S: Sequencer, const N: usize> Default for StaticQueue<T, S, {N}> {
+impl<T, S: Sequencer, const N: usize> Default for StaticQueue<T, S, { N }> {
     fn default() -> Self {
         unsafe { MaybeUninit::zeroed().assume_init() }
     }
@@ -132,7 +142,8 @@ impl<'a, Q: Queue> Producer<'a, Q> {
     }
 }
 
-pub type StaticSpinQueue<T, const N: usize> = StaticQueue<T, super::sequencer::SpinSequencer, {N}>;
+pub type StaticSpinQueue<T, const N: usize> =
+    StaticQueue<T, super::sequencer::SpinSequencer, { N }>;
 
 #[cfg(test)]
 mod test {
@@ -142,8 +153,8 @@ mod test {
     fn basic() {
         let queue: StaticSpinQueue<usize, 4> = Default::default();
 
-        let mut producer = queue.producer();
-        let mut consumer = queue.consumer();
+        let producer = queue.producer();
+        let consumer = queue.consumer();
 
         producer.push(1).unwrap();
         producer.push(2).unwrap();
@@ -181,8 +192,8 @@ mod test {
         let queue: Box<StaticSpinQueue<usize, 128>> = Default::default();
         let queue = Box::leak(queue);
 
-        let mut producer = queue.producer();
-        let mut consumer = queue.consumer();
+        let producer = queue.producer();
+        let consumer = queue.consumer();
 
         let pth = std::thread::spawn(move || {
             for i in RANGE {
@@ -230,7 +241,7 @@ mod test {
 
         let mut pths = Vec::with_capacity(P_COUNT);
         for _ in 0..P_COUNT {
-            let mut producer = MPMC_QUEUE.producer();
+            let producer = MPMC_QUEUE.producer();
             let ppcnt = &*pending_producer;
             pths.push(std::thread::spawn(move || {
                 let mut fail_cnt = 0;
@@ -265,7 +276,7 @@ mod test {
         let mut cths = Vec::with_capacity(C_COUNT);
 
         for _ in 0..C_COUNT {
-            let mut consumer = MPMC_QUEUE.consumer();
+            let consumer = MPMC_QUEUE.consumer();
             let counter = Box::leak(box [0u8; LIMIT]);
             let ppcnt = &*pending_producer;
             cths.push(std::thread::spawn(move || {
