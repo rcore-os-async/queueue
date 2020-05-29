@@ -5,6 +5,13 @@ use core::mem::MaybeUninit;
 use core::result::Result;
 use core::sync::atomic::*;
 
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+#[cfg(feature = "std")]
+use std::vec::Vec;
+
+use spin::Mutex;
+
 pub trait Queue: Send + Sync {
     type Item;
 
@@ -33,14 +40,14 @@ pub trait Queue: Send + Sync {
     }
 }
 
-pub struct StaticQueue<T, S: Sequencer, const N: usize> {
-    slots: [Slot<T, S>; { N }],
+pub struct DynamicQueue<T, S: Sequencer, const N: usize> {
+    slots: Mutex<Vec<[Slot<T, S>; { N }]>>,
 
     push_ticket: AtomicUsize,
     pop_ticket: AtomicUsize,
 }
 
-impl<T, S: Sequencer, const N: usize> StaticQueue<T, S, { N }> {
+impl<T, S: Sequencer, const N: usize> DynamicQueue<T, S, { N }> {
     fn obtain_push_ticket(&self) -> Option<usize> {
         loop {
             let cur_push = self.push_ticket.load(Ordering::Acquire);
@@ -49,7 +56,9 @@ impl<T, S: Sequencer, const N: usize> StaticQueue<T, S, { N }> {
             let size = cur_push as isize - cur_pop as isize;
             // Queue is full
             if size >= { N } as isize {
-                break None;
+                unsafe {
+                    self.slots.lock().push(MaybeUninit::zeroed().assume_init());
+                }
             }
 
             // TODO: do we need Release here?
@@ -87,7 +96,7 @@ impl<T, S: Sequencer, const N: usize> StaticQueue<T, S, { N }> {
     }
 }
 
-impl<T, S: Sequencer, const N: usize> Queue for StaticQueue<T, S, { N }> {
+impl<T, S: Sequencer, const N: usize> Queue for DynamicQueue<T, S, { N }> {
     type Item = T;
 
     fn pop(&self) -> Option<Self::Item> {
@@ -96,7 +105,7 @@ impl<T, S: Sequencer, const N: usize> Queue for StaticQueue<T, S, { N }> {
         let offset = ticket % N;
         let seq = ticket / N;
 
-        Some(self.slots[offset].pop(seq))
+        Some(self.slots.lock()[seq][offset].pop(seq))
     }
 
     fn push(&self, t: Self::Item) -> Result<(), Self::Item> {
@@ -108,15 +117,23 @@ impl<T, S: Sequencer, const N: usize> Queue for StaticQueue<T, S, { N }> {
         let offset = ticket % N;
         let seq = ticket / N;
 
-        self.slots[offset].push(t, seq);
+        self.slots.lock()[seq][offset].push(t, seq);
 
         Ok(())
     }
 }
 
-impl<T, S: Sequencer, const N: usize> Default for StaticQueue<T, S, { N }> {
+impl<T, S: Sequencer, const N: usize> Default for DynamicQueue<T, S, { N }> {
     fn default() -> Self {
-        unsafe { MaybeUninit::zeroed().assume_init() }
+        let res = DynamicQueue {
+            slots: Mutex::new(Vec::new()),
+            push_ticket: AtomicUsize::new(0),
+            pop_ticket: AtomicUsize::new(0),
+        };
+        unsafe {
+            res.slots.lock().push(MaybeUninit::zeroed().assume_init());
+        }
+        res
     }
 }
 
@@ -142,8 +159,8 @@ impl<'a, Q: Queue> Producer<'a, Q> {
     }
 }
 
-pub type StaticSpinQueue<T, const N: usize> =
-    StaticQueue<T, super::sequencer::SpinSequencer, { N }>;
+pub type DynamicSpinQueue<T, const N: usize> =
+    DynamicQueue<T, super::sequencer::SpinSequencer, { N }>;
 
 #[cfg(test)]
 mod test {
@@ -151,7 +168,7 @@ mod test {
 
     #[test]
     fn basic() {
-        let queue: StaticSpinQueue<usize, 4> = Default::default();
+        let queue: DynamicSpinQueue<usize, 4> = Default::default();
 
         let producer = queue.producer();
         let consumer = queue.consumer();
@@ -189,7 +206,7 @@ mod test {
     fn spsc() {
         const RANGE: core::ops::Range<usize> = 0usize..4194304usize;
 
-        let queue: Box<StaticSpinQueue<usize, 128>> = Default::default();
+        let queue: Box<DynamicSpinQueue<usize, 128>> = Default::default();
         let queue = Box::leak(queue);
 
         let producer = queue.producer();
@@ -222,7 +239,7 @@ mod test {
     }
 
     lazy_static::lazy_static! {
-        static ref MPMC_QUEUE: Box<StaticSpinQueue<usize, 1>> = box Default::default();
+        static ref MPMC_QUEUE: Box<DynamicSpinQueue<usize, 1>> = box Default::default();
     }
 
     #[test]
