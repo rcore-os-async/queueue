@@ -1,6 +1,7 @@
 use super::sequencer::Sequencer;
 use super::slot::Slot;
 
+use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::result::Result;
 use core::sync::atomic::*;
@@ -9,8 +10,6 @@ use core::sync::atomic::*;
 use alloc::vec::Vec;
 #[cfg(feature = "std")]
 use std::vec::Vec;
-
-use spin::Mutex;
 
 pub trait Queue: Send + Sync {
     type Item;
@@ -41,8 +40,9 @@ pub trait Queue: Send + Sync {
 }
 
 pub struct DynamicQueue<T, S: Sequencer, const N: usize> {
-    slots: Mutex<Vec<[Slot<T, S>; { N }]>>,
-
+    slots: UnsafeCell<Vec<[Slot<T, S>; { N }]>>,
+    state: AtomicUsize,
+    slot_count: AtomicUsize,
     push_ticket: AtomicUsize,
     pop_ticket: AtomicUsize,
 }
@@ -50,14 +50,32 @@ pub struct DynamicQueue<T, S: Sequencer, const N: usize> {
 impl<T, S: Sequencer, const N: usize> DynamicQueue<T, S, { N }> {
     fn obtain_push_ticket(&self) -> Option<usize> {
         loop {
+            let cur_slot_count = self.slot_count.load(Ordering::Acquire);
+            if self
+                .state
+                .compare_and_swap(cur_slot_count, cur_slot_count, Ordering::AcqRel)
+                != cur_slot_count
+            {
+                continue;
+            }
+
             let cur_push = self.push_ticket.load(Ordering::Acquire);
             let cur_pop = self.pop_ticket.load(Ordering::Acquire);
 
             let size = cur_push as isize - cur_pop as isize;
             // Queue is full
             if size >= { N } as isize {
-                unsafe {
-                    self.slots.lock().push(MaybeUninit::zeroed().assume_init());
+                if self
+                    .state
+                    .compare_and_swap(cur_slot_count, cur_slot_count + 1, Ordering::AcqRel)
+                    == cur_slot_count
+                {
+                    unsafe {
+                        (*self.slots.get()).push(MaybeUninit::zeroed().assume_init());
+                    }
+                    self.slot_count.fetch_add(1, Ordering::SeqCst);
+                } else {
+                    continue;
                 }
             }
 
@@ -105,7 +123,7 @@ impl<T, S: Sequencer, const N: usize> Queue for DynamicQueue<T, S, { N }> {
         let offset = ticket % N;
         let seq = ticket / N;
 
-        Some(self.slots.lock()[seq][offset].pop(seq))
+        unsafe { Some((*self.slots.get())[seq][offset].pop(seq)) }
     }
 
     fn push(&self, t: Self::Item) -> Result<(), Self::Item> {
@@ -117,21 +135,27 @@ impl<T, S: Sequencer, const N: usize> Queue for DynamicQueue<T, S, { N }> {
         let offset = ticket % N;
         let seq = ticket / N;
 
-        self.slots.lock()[seq][offset].push(t, seq);
+        unsafe {
+            (*self.slots.get())[seq][offset].push(t, seq);
+        }
 
         Ok(())
     }
 }
 
+unsafe impl<T, S: Sequencer, const N: usize> Sync for DynamicQueue<T, S, { N }> {}
+
 impl<T, S: Sequencer, const N: usize> Default for DynamicQueue<T, S, { N }> {
     fn default() -> Self {
         let res = DynamicQueue {
-            slots: Mutex::new(Vec::new()),
+            slots: UnsafeCell::new(Vec::new()),
+            state: AtomicUsize::new(1),
+            slot_count: AtomicUsize::new(1),
             push_ticket: AtomicUsize::new(0),
             pop_ticket: AtomicUsize::new(0),
         };
         unsafe {
-            res.slots.lock().push(MaybeUninit::zeroed().assume_init());
+            (*res.slots.get()).push(MaybeUninit::zeroed().assume_init());
         }
         res
     }
